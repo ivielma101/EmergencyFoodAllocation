@@ -9,12 +9,17 @@ import Results       from "./components/Results";
 const COLORS = ["#2563eb","#16a34a","#dc2626","#9333ea","#ea580c","#0891b2","#ca8a04","#db2777"];
 
 const EXAMPLE_ITEMS = [
-  { id:1, name:"exp_1d", quantity:500000, calPerUnit:1, lastDay:1,    neverExpires:false, totalCal:500000 },
-  { id:2, name:"exp_3d", quantity:150000, calPerUnit:1, lastDay:3,    neverExpires:false, totalCal:150000 },
-  { id:3, name:"exp_7d", quantity:350000, calPerUnit:1, lastDay:7,    neverExpires:false, totalCal:350000 },
-  { id:4, name:"never",  quantity:500000, calPerUnit:1, lastDay:null, neverExpires:true,  totalCal:500000 },
+  { id:1, name:"Fresh Produce",   quantity:500000, calPerUnit:1, lastDay:1,    neverExpires:false, totalCal:500000 },
+  { id:2, name:"Bread & Dairy",   quantity:150000, calPerUnit:1, lastDay:3,    neverExpires:false, totalCal:150000 },
+  { id:3, name:"Canned Meals",    quantity:350000, calPerUnit:1, lastDay:7,    neverExpires:false, totalCal:350000 },
+  { id:4, name:"Dry Goods",       quantity:500000, calPerUnit:1, lastDay:null, neverExpires:true,  totalCal:500000 },
 ];
-const EXAMPLE_CFG = { people:"50", calPerPerson:"2000", H:"60" };
+const EXAMPLE_CFG = {
+  people: "50", calPerPerson: "2000", H: "60",
+  useGroups: false,
+  groupA: { people: "30", calPerPerson: "2000" },
+  groupB: { people: "20", calPerPerson: "1500" },
+};
 
 // Ration scenarios to solve in parallel
 const RATIONS = [
@@ -29,7 +34,6 @@ function buildBuckets(items) {
   items.forEach((item) => {
     const key = item.neverExpires ? "null" : String(item.lastDay);
     if (!map[key]) map[key] = {
-      name:     item.neverExpires ? "never" : `exp_${item.lastDay}d`,
       calories: 0,
       last_day: item.neverExpires ? null : item.lastDay,
       items:    [],
@@ -43,7 +47,7 @@ function buildBuckets(items) {
       if (b.last_day === null) return -1;
       return a.last_day - b.last_day;
     })
-    .map((b, i) => ({ ...b, color: COLORS[i % COLORS.length] }));
+    .map((b, i) => ({ ...b, name: b.items.join(" + "), color: COLORS[i % COLORS.length] }));
 }
 
 const MAIN_TABS = ["Food Input", "Parameters", "Output"];
@@ -51,7 +55,12 @@ const MAIN_TABS = ["Food Input", "Parameters", "Output"];
 export default function App() {
   const [tab,        setTab]        = useState(0);
   const [items,      setItems]      = useState([]);
-  const [cfg,        setCfg]        = useState({ people:"", calPerPerson:"2000", H:"365" });
+  const [cfg,        setCfg]        = useState({
+    people: "", calPerPerson: "2000", H: "365",
+    useGroups: false,
+    groupA: { people: "", calPerPerson: "2000" },
+    groupB: { people: "", calPerPerson: "2000" },
+  });
   const [rationResults, setRationResults] = useState(null); // array of 4 results
   const [buckets,    setBuckets]    = useState([]);
   const [loading,    setLoading]    = useState(false);
@@ -62,10 +71,22 @@ export default function App() {
   const debounceRef = useRef(null);
 
   const runSolve = useCallback(async (currentItems, currentCfg, silent = false) => {
-    const p = parseInt(currentCfg.people);
-    const c = parseFloat(currentCfg.calPerPerson);
     const H = parseInt(currentCfg.H) || 365;
-    if (!currentItems.length || !p || p <= 0 || !c || c <= 0) return;
+
+    let totalCalPerDay;
+    if (currentCfg.useGroups) {
+      const pA = parseInt(currentCfg.groupA.people) || 0;
+      const cA = parseFloat(currentCfg.groupA.calPerPerson) || 0;
+      const pB = parseInt(currentCfg.groupB.people) || 0;
+      const cB = parseFloat(currentCfg.groupB.calPerPerson) || 0;
+      totalCalPerDay = pA * cA + pB * cB;
+      if (!currentItems.length || totalCalPerDay <= 0) return;
+    } else {
+      const p = parseInt(currentCfg.people);
+      const c = parseFloat(currentCfg.calPerPerson);
+      if (!currentItems.length || !p || p <= 0 || !c || c <= 0) return;
+      totalCalPerDay = p * c;
+    }
 
     const coloredBuckets = buildBuckets(currentItems);
     const bucketPayload  = coloredBuckets.map(({ name, calories, last_day }) => ({ name, calories, last_day }));
@@ -73,21 +94,26 @@ export default function App() {
     if (!silent) { setLoading(true); setError(""); }
     else setAutoStatus("Updating...");
 
+    // Build groupInfo to carry into results for display
+    const groupInfo = currentCfg.useGroups
+      ? { useGroups: true, groupA: { ...currentCfg.groupA }, groupB: { ...currentCfg.groupB } }
+      : { useGroups: false, people: parseInt(currentCfg.people), calPerPerson: parseFloat(currentCfg.calPerPerson) };
+
     try {
       // Run all 4 ration scenarios in parallel
       const results = await Promise.all(
         RATIONS.map((r) =>
           optimize({
             buckets:             bucketPayload,
-            people:              p,
-            calories_per_person: c * r.multiplier,
+            people:              1,
+            calories_per_person: totalCalPerDay * r.multiplier,
             H,
             enforce_no_waste:    true,
           }).then((data) => {
-            const D          = p * c * r.multiplier;
+            const D          = totalCalPerDay * r.multiplier;
             const totalCal   = coloredBuckets.reduce((s, b) => s + b.calories, 0);
             const totalWasted= Object.values(data.total_waste_by_bucket).reduce((s, v) => s + v, 0);
-            return { ...data, D, totalCal, totalWasted, label: r.label, multiplier: r.multiplier };
+            return { ...data, D, totalCal, totalWasted, label: r.label, multiplier: r.multiplier, groupInfo };
           })
         )
       );
@@ -126,11 +152,23 @@ export default function App() {
   };
 
   const handleSolve = () => {
-    const p = parseInt(cfg.people), c = parseFloat(cfg.calPerPerson);
-    if (!items.length)                return setError("Add at least one food item.");
-    if (!p || p <= 0 || !c || c <= 0) return setError("Enter a valid people count and daily calories.");
+    if (!items.length) return setError("Add at least one food item.");
+    if (cfg.useGroups) {
+      const pA = parseInt(cfg.groupA.people) || 0;
+      const cA = parseFloat(cfg.groupA.calPerPerson) || 0;
+      const pB = parseInt(cfg.groupB.people) || 0;
+      const cB = parseFloat(cfg.groupB.calPerPerson) || 0;
+      if (pA * cA + pB * cB <= 0) return setError("At least one group needs people and calories.");
+      if ((pA > 0 && cA <= 0) || (pB > 0 && cB <= 0)) return setError("Enter valid calories for each active group.");
+    } else {
+      const p = parseInt(cfg.people), c = parseFloat(cfg.calPerPerson);
+      if (!p || p <= 0 || !c || c <= 0) return setError("Enter a valid people count and daily calories.");
+    }
     runSolve(items, cfg, false);
   };
+
+  const handleGroupChange = (group, k, v) =>
+    setCfg((p) => ({ ...p, [group]: { ...p[group], [k]: v } }));
 
   const totalInventoryCal = items.reduce((s, f) => s + f.totalCal, 0);
   const fullResult = rationResults ? rationResults[0] : null;
@@ -179,6 +217,7 @@ export default function App() {
             <MissionConfig
               cfg={cfg}
               onChange={(k, v) => setCfg((p) => ({ ...p, [k]: v }))}
+              onGroupChange={handleGroupChange}
               onSolve={handleSolve}
               onLoadExample={handleLoadExample}
               totalInventoryCal={totalInventoryCal}

@@ -26,7 +26,7 @@ function RationCards({ rationResults, activeIdx, onSelect }) {
 }
 
 // ── Daily plan accordion ──────────────────────────────────────────────
-function DayRow({ row, buckets, calPerPerson }) {
+function DayRow({ row, buckets }) {
   const [open, setOpen] = useState(false);
   const breakdown = buckets.filter((b) => (row[b.name] || 0) > 0.01);
 
@@ -35,7 +35,7 @@ function DayRow({ row, buckets, calPerPerson }) {
       <div className={`day-row${open ? " open" : ""}`} onClick={() => setOpen((p) => !p)}>
         <span className="day-chevron">{open ? "▾" : "▸"}</span>
         <span className="day-label">Day {row.day}</span>
-        <span className="day-total">— {fmt(row.total)} cal ({fmt(calPerPerson)} cal/person)</span>
+        <span className="day-total">— {fmt(row.total)} cal</span>
       </div>
       {open && (
         <div className="day-detail">
@@ -54,8 +54,8 @@ function DayRow({ row, buckets, calPerPerson }) {
 }
 
 function DailyPlan({ result, buckets }) {
-  const calPerPerson = result.D / (result.totalCal > 0 ? 1 : 1); // D is already per group
   const survivedDays = result.schedule.filter((r) => r.survived === 1);
+  const gi = result.groupInfo;
 
   // Build expiry warning map: day → [bucket warnings]
   const expiryWarnings = {};
@@ -69,13 +69,29 @@ function DailyPlan({ result, buckets }) {
   return (
     <div className="daily-plan">
       <div className="daily-plan-header">
-        Daily draw: <strong>{fmt(result.D)} cal</strong> for the group
-        &nbsp;·&nbsp; {fmt(result.D / (result.totalCal / result.totalCal))} cal/day total
+        <div>Daily draw: <strong>{fmt(result.D)} cal/day</strong></div>
+        {gi?.useGroups ? (
+          <div className="daily-plan-groups">
+            <span>
+              <span className="dim">Group A: </span>
+              <strong>{gi.groupA.people}</strong> × {fmt((parseFloat(gi.groupA.calPerPerson) || 0) * result.multiplier)} cal
+            </span>
+            <span className="dim"> · </span>
+            <span>
+              <span className="dim">Group B: </span>
+              <strong>{gi.groupB.people}</strong> × {fmt((parseFloat(gi.groupB.calPerPerson) || 0) * result.multiplier)} cal
+            </span>
+          </div>
+        ) : gi?.people > 0 && (
+          <div className="daily-plan-groups">
+            <span className="dim">{gi.people} people × {fmt((gi.calPerPerson || 0) * result.multiplier)} cal/person</span>
+          </div>
+        )}
       </div>
       <div className="day-list">
         {survivedDays.map((row) => (
           <div key={row.day}>
-            <DayRow row={row} buckets={buckets} calPerPerson={result.D} />
+            <DayRow row={row} buckets={buckets} />
             {expiryWarnings[row.day] && expiryWarnings[row.day].map((b) => (
               <div key={b.name} className="expiry-warning">
                 <span className="expiry-icon">⚠</span>
